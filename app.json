@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "GEPI",
+    "slug": "gepi",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "gepi",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0E0E0E",
+    "android": {
+      "package": "com.gepi.app",
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#F97316"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.gepi.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Ler o crachá e fotografar a conferência de EPI"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Ler o crachá e fotografar a conferência de EPI",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0E0E0E",
+          "resizeMode": "contain"
+        }
+      ],
+      "expo-sharing"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}
