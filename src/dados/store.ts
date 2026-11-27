@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { useSyncExternalStore } from 'react';
 import { varreduraDiaria } from '@/dominio/operacoes';
-import { criarDemo, hashPin } from '@/dominio/seed';
+import { criarDemo, hashPin, semearCompras } from '@/dominio/seed';
 import type { Ctx, Estado, ItemCheckin, Usuario } from '@/dominio/tipos';
 import { uuidv7 } from '@/dominio/uuid';
 import { apagarFoto } from './fotos';
@@ -104,8 +104,12 @@ export async function carregar() {
 
   const salvo = await AsyncStorage.getItem(CHAVE_ESTADO);
   const estado = salvo ? (JSON.parse(salvo) as Estado) : criarDemo(criarCtx());
+  // Estado salvo antes do módulo de compras: ganha as tabelas novas (e os dados de exemplo).
+  const semCompras = !estado.fornecedores;
+  if (semCompras) Object.assign(estado, { fornecedores: [], cotacoes: [], pedidos: [] });
   const obra = (await AsyncStorage.getItem(CHAVE_OBRA)) ?? estado.obras[0].id;
   publicar({ estado, obra_id: obra });
+  if (semCompras) transacao(semearCompras);
   transacao(varreduraDiaria);
 
   const agora = new Date().toISOString();

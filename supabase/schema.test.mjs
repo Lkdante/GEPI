@@ -195,3 +195,35 @@ test('trilha fica encadeada e o trabalhador comum não a lê', async () => {
   const leitura = await como({ ...tecnicoA, perfil: 'encarregado' }, () => db.query('select id from public.audit_log'));
   assert.equal(leitura.rows.length, 0);
 });
+
+test('compras: cotação respeita empresa e não aceita preço zero', async () => {
+  await inserir('fornecedores', { ...base(uid(90), EMPRESA_A, null), nome: 'Fornecedor', frete_fixo: 60 });
+  const cotacao = (id, preco) => ({
+    ...base(id, EMPRESA_A, null),
+    fornecedor_id: uid(90),
+    epi_id: uid(40),
+    ca_id: uid(41),
+    preco_unitario: preco,
+    prazo_dias: 2,
+    valida_ate: '2027-01-01',
+    origem: 'manual',
+  });
+  await inserir('cotacoes', cotacao(uid(91), 250));
+  await assert.rejects(inserir('cotacoes', cotacao(uid(92), 0)), /preco_unitario/);
+  const { rows } = await como(tecnicoB, () => db.query('select id from public.cotacoes'));
+  assert.equal(rows.length, 0);
+});
+
+test('compras: pedido recebido precisa da data de chegada', async () => {
+  const pedido = {
+    ...base(uid(93), EMPRESA_A, OBRA_A),
+    fornecedor_id: uid(90),
+    itens: JSON.stringify([]),
+    frete: 60,
+    total: 60,
+    prazo_prometido: AGORA,
+    situacao: 'recebido',
+  };
+  await assert.rejects(inserir('pedidos', pedido), /recebido_tem_chegada/);
+  await inserir('pedidos', { ...pedido, chegou_em: AGORA, no_prazo: true });
+});

@@ -181,18 +181,63 @@ export interface Requisicao extends Base {
   para_quem: Fornecedor;
   status: StatusReq;
 }
+/** De onde veio a necessidade de comprar. Define a urgência (prazo máximo de entrega). */
+export type OrigemSolicitacao = 'estoque_minimo' | 'requisicao_sem_estoque' | 'programada';
 export interface SolicitacaoCompra extends Base {
   epi_id: string;
   quantidade: number;
-  origem: 'estoque_minimo' | 'requisicao_sem_estoque';
+  origem: OrigemSolicitacao;
   situacao: 'nao_autorizada' | 'autorizada';
+}
+
+// ---- Cotação e combinação de fornecedores (src/dominio/compras.ts) ----
+
+/** Quem vende EPI para a construtora. Não confundir com `Fornecedor` (quem fornece o EPI ao trabalhador). */
+export interface FornecedorCompra extends Base {
+  nome: string;
+  /** Custo fixo por pedido: é o que torna a COMBINAÇÃO de fornecedores importante. */
+  frete_fixo: number;
+  /** Valor mínimo (R$) para o fornecedor aceitar o pedido. */
+  pedido_minimo: number;
+}
+export interface Cotacao extends Base {
+  fornecedor_id: string;
+  epi_id: string;
+  /** EPI só se compra com CA válido: a cotação aponta o CA do produto ofertado. */
+  ca_id: string;
+  /** R$ por unidade do EPI (luva: por par). */
+  preco_unitario: number;
+  prazo_dias: number;
+  /** null = sem limite informado. */
+  quantidade_disponivel: number | null;
+  valida_ate: string;
+  origem: 'manual' | 'texto';
+}
+export interface ItemPedidoCompra {
+  epi_id: string;
+  cotacao_id: string;
+  ca_id: string;
+  quantidade: number;
+  preco_unitario: number;
+  solicitacao_ids: string[];
+}
+/** Pedido emitido a um fornecedor. Os recebidos são o histórico que estima o risco de atraso. */
+export interface PedidoCompra extends Base {
+  fornecedor_id: string;
+  itens: ItemPedidoCompra[];
+  frete: number;
+  total: number;
+  prazo_prometido: string;
+  situacao: 'emitido' | 'recebido';
+  chegou_em: string | null;
+  no_prazo: boolean | null;
 }
 export interface Movimentacao extends Base {
   tipo: 'entrada' | 'saida' | 'ajuste';
   epi_id: string;
   /** Quantidade com sinal: saldo é sempre a soma destas linhas. */
   quantidade: number;
-  origem: 'requisicao' | 'entrada_manual' | 'carga_inicial';
+  origem: 'requisicao' | 'entrada_manual' | 'carga_inicial' | 'pedido_compra';
   entrega_id: string | null;
   quem_recebeu: string | null;
 }
@@ -250,6 +295,9 @@ export interface Estado {
   requisicoes: Requisicao[];
   solicitacoes: SolicitacaoCompra[];
   movimentacoes: Movimentacao[];
+  fornecedores: FornecedorCompra[];
+  cotacoes: Cotacao[];
+  pedidos: PedidoCompra[];
   fila_sync: OperacaoFila[];
   audit: LinhaAudit[];
   config: Config;

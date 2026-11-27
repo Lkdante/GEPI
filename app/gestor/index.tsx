@@ -1,7 +1,8 @@
 // Painel do gestor: métricas calculadas dos registros, sem número estimado.
+import { useRouter } from 'expo-router';
 import { View } from 'react-native';
 import { transacao, useEstado, useRaiz } from '@/dados/store';
-import { aprovarCompra } from '@/dominio/operacoes';
+import { brl, itensParaComprar } from '@/dominio/compras';
 import { episAbaixoDoMinimo, metricas } from '@/dominio/regras';
 import type { Config } from '@/dominio/tipos';
 import { Botao, T } from '@/ui/base';
@@ -32,11 +33,13 @@ const arredonda = (n: number) => Math.round(n * 100) / 100;
 
 export default function Painel() {
   const e = useEstado();
+  const router = useRouter();
   const { obra_id } = useRaiz();
   const agora = new Date().toISOString();
   const m = metricas(e, obra_id!, agora);
   const baixos = episAbaixoDoMinimo(e, obra_id!);
-  const compras = e.solicitacoes.filter((s) => s.obra_id === obra_id && s.situacao === 'nao_autorizada');
+  const compras = itensParaComprar(e, obra_id!);
+  const aCaminho = e.pedidos.filter((p) => p.obra_id === obra_id && p.situacao === 'emitido');
   const { config } = e;
 
   const ajustar = (patch: Partial<Config>) =>
@@ -77,20 +80,21 @@ export default function Painel() {
         </Cartao>
       ))}
 
-      <Secao>Aprovar compras</Secao>
-      {compras.length === 0 ? <Vazio>Nenhuma solicitação aguardando.</Vazio> : null}
-      {compras.map((s) => {
-        const epi = e.epis.find((x) => x.id === s.epi_id)!;
-        return (
-          <Cartao key={s.id}>
-            <T tam={16} peso="extra" c={cor.fundo}>{s.quantidade} × {epi.descricao}</T>
-            <T tam={14} c={cor.claroTexto}>
-              {s.origem === 'estoque_minimo' ? 'Saldo abaixo do mínimo' : 'Pedido sem estoque'}
-            </T>
-            <Botao titulo="Aprovar" variante="verde" alto={52} tam={15} onPress={() => transacao((est, ctx) => aprovarCompra(est, ctx, s.id))} />
-          </Cartao>
-        );
-      })}
+      <Secao>Compras</Secao>
+      <Cartao>
+        <T tam={16} peso="extra" c={cor.fundo}>
+          {compras.length === 0 ? 'Nenhum EPI para comprar' : `${compras.length} EPI${compras.length === 1 ? '' : 's'} para comprar`}
+        </T>
+        <T tam={14} c={cor.claroTexto}>
+          {compras.map((c) => `${c.quantidade} × ${e.epis.find((x) => x.id === c.epi_id)?.descricao}`).join(', ') || 'As solicitações aparecem aqui quando o estoque baixa ou falta EPI.'}
+        </T>
+        {aCaminho.length > 0 ? (
+          <T tam={14} c={cor.claroTexto}>
+            {aCaminho.length} pedido{aCaminho.length === 1 ? '' : 's'} a caminho ({brl(aCaminho.reduce((s, p) => s + p.total, 0))}).
+          </T>
+        ) : null}
+        <Botao titulo="Ver plano de compra" alto={52} tam={15} onPress={() => router.push('/gestor/compras')} />
+      </Cartao>
 
       <Secao>Limites da IA</Secao>
       <Cartao gap={10}>

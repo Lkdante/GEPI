@@ -2,8 +2,17 @@
 // Datas relativas a "agora" para a demonstração não envelhecer.
 import { sha256 } from 'js-sha256';
 import { detectorSimulado } from '../ia/detector';
-import { abrirCheckin, aplicarDeteccao, atualizar, fecharCheckin, inserir, registrarConsentimento } from './operacoes';
-import { episExigidos, somarDias } from './regras';
+import {
+  abrirCheckin,
+  aplicarDeteccao,
+  atualizar,
+  fecharCheckin,
+  inserir,
+  programarCompra,
+  registrarConsentimento,
+  solicitarCompra,
+} from './operacoes';
+import { diaLocal, episAbaixoDoMinimo, episExigidos, somarDias } from './regras';
 import type { CenarioEPI, Ctx, EPI, Estado, Perfil, Tarefa } from './tipos';
 
 export const PIN_DEMO = '1234';
@@ -30,6 +39,9 @@ export function estadoVazio(): Estado {
     requisicoes: [],
     solicitacoes: [],
     movimentacoes: [],
+    fornecedores: [],
+    cotacoes: [],
+    pedidos: [],
     fila_sync: [],
     audit: [],
     config: {
@@ -237,7 +249,85 @@ export function criarDemo(ctx: Ctx): Estado {
     modo: 'completo',
   });
   fecharCheckin(e, antigo, c, aplicarDeteccao(e, antigo, c, bruno, null, leituras, detectorSimulado, 1));
+  semearCompras(e, ctx);
   return e;
+}
+
+// ---------------------------------------------------------------- compras (fictício)
+
+/** Preço de referência por unidade (luva: por par), só para gerar as cotações de exemplo. */
+const PRECO_REF: Record<string, number> = {
+  capacete: 45, botina: 120, colete: 25, luva: 9, cinto: 260, oculos: 15, protetor: 2.5,
+};
+
+/** [nome, frete, pedido mínimo, nível de preço, prazo (dias), pedidos recebidos, atrasados, só vende] */
+const FORNECEDORES: [string, number, number, number, number, number, number, string[] | null][] = [
+  ['EPI Center Brasília', 60, 0, 1.08, 2, 10, 1, null],
+  ['Segurança Total Distribuidora', 120, 400, 1.0, 3, 6, 2, null],
+  ['MegaEPI Atacado', 250, 1500, 0.86, 6, 8, 5, null],
+  ['Luvas & Cia', 40, 150, 0.82, 2, 0, 0, ['luva', 'protetor']],
+];
+
+/**
+ * Fornecedores, cotações e histórico de pedidos. Casos montados de propósito:
+ * - MegaEPI cota capacete com o CA vencido: a cotação fica fora do plano;
+ * - Segurança Total cotou luva a R$ 0,75 (preço da caixa lançado errado): fica fora como suspeita;
+ * - Luvas & Cia é nova (sem histórico): o risco dela é a priori, 20%.
+ * Só roda em demonstração. Também é chamada para estados antigos, salvos antes das compras.
+ */
+export function semearCompras(e: Estado, ctx: Ctx) {
+  if (e.fornecedores.length > 0) return;
+  const epi = (tipo: string) => e.epis.find((x) => x.tipo === tipo)!;
+  const caValido = (tipo: string) =>
+    e.cas.find((c) => c.epi_id === epi(tipo).id && c.situacao === 'valido')!;
+  const caVencido = e.cas.find((c) => c.situacao === 'vencido');
+  const validade = diaLocal(somarDias(ctx.agora, 15));
+
+  FORNECEDORES.forEach(([nome, frete, minimo, nivel, prazo, recebidos, atrasados, mix], k) => {
+    const f = inserir(e, ctx, 'fornecedores', null, { nome, frete_fixo: frete, pedido_minimo: minimo });
+    for (const tipo of Object.keys(PRECO_REF)) {
+      if (mix && !mix.includes(tipo)) continue;
+      if (nome.startsWith('MegaEPI') && tipo === 'cinto') continue; // não trabalha com cinto
+      // variação determinística de ±4% para os preços não ficarem idênticos
+      const ruido = 1 + (((k * 7 + tipo.length * 3) % 9) - 4) / 100;
+      let preco = Math.round(PRECO_REF[tipo] * nivel * ruido * 100) / 100;
+      let ca = caValido(tipo);
+      if (nome.startsWith('MegaEPI') && tipo === 'capacete' && caVencido) ca = caVencido;
+      if (nome.startsWith('Segurança') && tipo === 'luva') preco = 0.75;
+      inserir(e, ctx, 'cotacoes', null, {
+        fornecedor_id: f.id,
+        epi_id: epi(tipo).id,
+        ca_id: ca.id,
+        preco_unitario: preco,
+        prazo_dias: prazo,
+        quantidade_disponivel: nome.startsWith('Luvas') && tipo === 'luva' ? 20 : null,
+        valida_ate: validade,
+        origem: 'manual',
+      });
+    }
+    // Histórico: pedidos já recebidos, no prazo ou não. É o que alimenta o risco de atraso.
+    for (let i = 0; i < recebidos; i++) {
+      const quando = somarDias(ctx.agora, -15 * (i + 1));
+      inserir(e, ctx, 'pedidos', e.obras[0].id, {
+        fornecedor_id: f.id,
+        itens: [],
+        frete,
+        total: 0,
+        prazo_prometido: quando,
+        situacao: 'recebido',
+        chegou_em: i < atrasados ? somarDias(quando, 3) : quando,
+        no_prazo: i >= atrasados,
+      });
+    }
+  });
+
+  // Necessidades da obra: o que já está abaixo do mínimo + a reposição programada do mês.
+  for (const obra of e.obras) {
+    for (const { epi: x } of episAbaixoDoMinimo(e, obra.id)) solicitarCompra(e, ctx, obra.id, x.id, 'estoque_minimo');
+  }
+  const aurora = e.obras[0].id;
+  const programada: [string, number][] = [['capacete', 10], ['botina', 6], ['colete', 10], ['oculos', 6], ['protetor', 30]];
+  for (const [tipo, qtd] of programada) programarCompra(e, ctx, aurora, epi(tipo).id, qtd);
 }
 
 /** Cadastros sem obra (obra_id nulo): valem para a empresa inteira. */
