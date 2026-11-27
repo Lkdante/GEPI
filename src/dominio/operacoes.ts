@@ -15,6 +15,7 @@ import {
   classificar,
   temRespostaNegativa,
 } from './regras';
+import type { DadosCotacao, ItemCompra, Plano } from './compras';
 import type {
   Base,
   CheckIn,
@@ -29,6 +30,8 @@ import type {
   LinhaAudit,
   MotivoReq,
   OperacaoFila,
+  Movimentacao,
+  PedidoCompra,
   Requisicao,
   Tabela,
   Trabalhador,
@@ -526,13 +529,20 @@ export function aprovarCompra(e: Estado, ctx: Ctx, solicitacao_id: string) {
   return atualizar(e, ctx, 'solicitacoes', solicitacao_id, { situacao: 'autorizada' });
 }
 
-/** Entrada manual: no GEPI o recebimento por NF-e (fase A do PDF) ainda não existe. */
-export function entradaEstoque(e: Estado, ctx: Ctx, obra_id: string, epi_id: string, quantidade: number) {
+/** Entrada manual ou de pedido recebido: no GEPI o recebimento por NF-e (fase A do PDF) ainda não existe. */
+export function entradaEstoque(
+  e: Estado,
+  ctx: Ctx,
+  obra_id: string,
+  epi_id: string,
+  quantidade: number,
+  origem: Movimentacao['origem'] = 'entrada_manual',
+) {
   inserir(e, ctx, 'movimentacoes', obra_id, {
     tipo: 'entrada',
     epi_id,
     quantidade,
-    origem: 'entrada_manual',
+    origem,
     entrega_id: null,
     quem_recebeu: null,
   });
@@ -564,4 +574,88 @@ export function varreduraDiaria(e: Estado, ctx: Ctx): number {
     geradas++;
   }
   return geradas;
+}
+
+// ---------------------------------------------------------------- compras
+
+/** Compra planejada pelo gestor (reposição do mês), além das que o ciclo do EPI gera sozinho. */
+export function programarCompra(e: Estado, ctx: Ctx, obra_id: string, epi_id: string, quantidade: number) {
+  if (!Number.isInteger(quantidade) || quantidade <= 0) throw new Error('Quantidade inválida');
+  return inserir(e, ctx, 'solicitacoes', obra_id, {
+    epi_id,
+    quantidade,
+    origem: 'programada',
+    situacao: 'nao_autorizada',
+  });
+}
+
+/** Cotação com CA de outro EPI ou inexistente nem é gravada; CA vencido é gravado e fica fora do plano. */
+export function registrarCotacao(e: Estado, ctx: Ctx, dados: DadosCotacao) {
+  const ca = e.cas.find((x) => x.id === dados.ca_id);
+  const conf = conferirCA(ca, dados.epi_id, ctx.agora);
+  if (conf === 'nao_encontrado' || conf === 'tipo_errado') throw new Error('CA não corresponde a este EPI');
+  if (!(dados.preco_unitario > 0) || !(dados.prazo_dias >= 0)) throw new Error('Preço ou prazo inválido');
+  return inserir(e, ctx, 'cotacoes', null, dados);
+}
+
+export function atualizarCondicoesFornecedor(
+  e: Estado,
+  ctx: Ctx,
+  fornecedor_id: string,
+  patch: { frete_fixo?: number; pedido_minimo?: number },
+) {
+  return atualizar(e, ctx, 'fornecedores', fornecedor_id, patch);
+}
+
+/**
+ * Transforma o plano em um pedido por fornecedor e autoriza as solicitações atendidas.
+ * EPI que ficou fora do plano continua com a solicitação em aberto.
+ */
+export function emitirPedidos(e: Estado, ctx: Ctx, obra_id: string, plano: Plano, itens: ItemCompra[]): PedidoCompra[] {
+  if (plano.alocacoes.length === 0) throw new Error('Plano vazio');
+  const pedidos: PedidoCompra[] = [];
+  for (const fid of plano.fornecedores) {
+    const f = e.fornecedores.find((x) => x.id === fid)!;
+    const aloc = plano.alocacoes.filter((a) => a.fornecedor_id === fid);
+    const material = aloc.reduce((s, a) => s + a.quantidade * a.preco_unitario, 0);
+    pedidos.push(
+      inserir(e, ctx, 'pedidos', obra_id, {
+        fornecedor_id: fid,
+        itens: aloc.map((a) => ({
+          epi_id: a.epi_id,
+          cotacao_id: a.cotacao_id,
+          ca_id: a.ca_id,
+          quantidade: a.quantidade,
+          preco_unitario: a.preco_unitario,
+          solicitacao_ids: itens.find((i) => i.epi_id === a.epi_id)?.solicitacao_ids ?? [],
+        })),
+        frete: f.frete_fixo,
+        total: Math.round((material + f.frete_fixo) * 100) / 100,
+        prazo_prometido: somarDias(ctx.agora, Math.max(...aloc.map((a) => a.prazo_dias))),
+        situacao: 'emitido',
+        chegou_em: null,
+        no_prazo: null,
+      }),
+    );
+  }
+  for (const item of itens) {
+    const comprado = plano.alocacoes.filter((a) => a.epi_id === item.epi_id).reduce((s, a) => s + a.quantidade, 0);
+    if (comprado < item.quantidade) continue;
+    for (const sid of item.solicitacao_ids) {
+      if (e.solicitacoes.find((s) => s.id === sid)?.situacao === 'nao_autorizada') aprovarCompra(e, ctx, sid);
+    }
+  }
+  return pedidos;
+}
+
+/** Recebimento: entra no estoque e vira histórico de prazo do fornecedor (alimenta o risco). */
+export function receberPedido(e: Estado, ctx: Ctx, pedido_id: string): PedidoCompra {
+  const p = e.pedidos.find((x) => x.id === pedido_id);
+  if (!p || p.situacao !== 'emitido') throw new Error('Pedido não está aguardando entrega');
+  for (const item of p.itens) entradaEstoque(e, ctx, p.obra_id!, item.epi_id, item.quantidade, 'pedido_compra');
+  return atualizar(e, ctx, 'pedidos', p.id, {
+    situacao: 'recebido',
+    chegou_em: ctx.agora,
+    no_prazo: ctx.agora <= p.prazo_prometido,
+  });
 }

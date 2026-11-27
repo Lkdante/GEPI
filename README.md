@@ -52,6 +52,13 @@ npm run typecheck
 Equipe: **Marcos** (encarregado), **Lucia** (almoxarife), **Renata** (técnica remota) e
 **Paulo** (gestor). Na tela do Paulo: métricas, compras e limites da IA.
 
+**Compras (Paulo → Compras e Cotações):** o motor escolhe de quem comprar o quê. Na
+demonstração, comprar o mais barato de cada EPI usaria 3 fornecedores, pagaria R$ 410 de
+frete e ainda ficaria abaixo do pedido mínimo de dois deles. A recomendação usa um só e sai
+cerca de 7% mais barata. Em **Cotações → Colar cotação → Usar exemplo**, a mensagem de
+WhatsApp vira preços (caixa com 12 pares vira preço por par) e a bota sem CA fica de fora.
+Emitir os pedidos autoriza as solicitações; a Lucia dá entrada em **Estoque → Pedidos a receber**.
+
 ## O que está pronto
 
 - **Trabalhador:** crachá, consentimento, foto guiada, resultado, checklist por áudio,
@@ -62,7 +69,34 @@ Equipe: **Marcos** (encarregado), **Lucia** (almoxarife), **Renata** (técnica r
   verificação da trilha de auditoria.
 - **Encarregado:** equipe do dia, troca de tarefa, liberação presencial, pedido de
   bloqueio, cadastro e crachá QR, pedidos da empreiteira.
-- **Gestor:** métricas da seção 11, EPI acabando, aprovação de compras e limites da IA.
+- **Gestor:** métricas da seção 11, EPI acabando, compras e limites da IA.
+- **Compras:** cotações por fornecedor, leitura de cotação colada, plano de compra ótimo,
+  comparação com "o mais barato de cada EPI", emissão de pedidos e recebimento no estoque.
+
+### Motor de cotação e combinação de fornecedores
+
+Fica em [src/dominio/compras.ts](src/dominio/compras.ts), em TypeScript, junto com o resto
+do domínio: roda no aparelho, sem internet, e vai para o servidor (Edge Function, também
+TypeScript) sem reescrever quando o backend existir.
+
+| Peça | Onde | O que faz |
+| --- | --- | --- |
+| Otimizador (MILP) | `compras.ts` + [simplex.ts](src/dominio/simplex.ts) | Minimiza preço + frete + custo esperado de atraso, com pedido mínimo, prazo, estoque do fornecedor e limite de fornecedores |
+| Solver | `simplex.ts` | Simplex em duas fases e branch-and-bound, sem dependência. Testado contra força bruta |
+| Risco de atraso | `riscoFornecedor` | Estimativa bayesiana (Beta-Binomial) a partir dos pedidos recebidos; fornecedor novo começa em 20% |
+| Preço suspeito | `avaliarCotacoes` | Menos da metade da mediana dos concorrentes fica fora até alguém conferir |
+| Leitura de cotação | [src/ia/extrator.ts](src/ia/extrator.ts) | Regras, no aparelho. A versão com LLM deve rodar no servidor, pela mesma interface |
+
+Regras garantidas e testadas ([compras.test.ts](src/dominio/compras.test.ts)):
+
+- Não se compra EPI com CA vencido, cancelado ou de outro EPI (mesma regra da entrega).
+- Cotação vencida não conta; vale a mais recente de cada fornecedor × EPI.
+- O que o extrator lê só vira preço depois da validação; o resto vira pendência.
+- O plano nunca é comparado com uma compra que o fornecedor recusaria.
+- Requisição sem estoque vira compra urgente (até 3 dias); estoque mínimo, 7; programada, 15.
+- Pedido recebido dá entrada no estoque e vira histórico de prazo do fornecedor.
+
+Fornecedores, preços e histórico de pedidos da demonstração são fictícios.
 
 Regras do documento garantidas no domínio e cobertas por teste
 ([src/dominio/dominio.test.ts](src/dominio/dominio.test.ts)):
@@ -92,7 +126,11 @@ Sem detector real, um trabalhador cadastrado no app nunca é liberado sozinho: t
 leitura dele cai em revisão humana. Só os crachás de demonstração têm roteiro próprio.
 
 Fora do escopo, por serem de outras fases do documento: NF-e, ferramentas, inspeções,
-Permissão de Trabalho, DDS, planilhas e Sienge. A entrada de estoque é manual até o
+Permissão de Trabalho, DDS, planilhas e Sienge.
+
+Sobre compras: o servidor MCP e a leitura de cotação por LLM ficam para quando o backend
+existir, porque precisam de um processo no servidor e de chave de API, que não pode ir
+dentro do app. A entrada de estoque é manual até o
 recebimento por NF-e existir.
 
 ## Antes do piloto
@@ -117,9 +155,9 @@ recebimento por NF-e existir.
 
 ```
 app/            telas (expo-router), uma pasta por perfil
-src/dominio/    tipos, regras, operações e seed: TypeScript puro e testado
+src/dominio/    tipos, regras, operações, compras, solver e seed: TypeScript puro e testado
 src/dados/      gravação no aparelho e fotos
-src/ia/         ponto de encaixe do detector
+src/ia/         pontos de encaixe do detector de EPI e do extrator de cotação
 src/ui/         tema, componentes e câmera
 supabase/       schema com RLS e testes
 ```

@@ -34,6 +34,8 @@ const NAVEGACAO: Record<Perfil, { rota: string; titulo: string }[]> = {
   ],
   gestor: [
     { rota: '/gestor', titulo: 'Painel' },
+    { rota: '/gestor/compras', titulo: 'Compras' },
+    { rota: '/gestor/cotacoes', titulo: 'Cotações' },
     { rota: '/tecnico/fichas', titulo: 'Fichas NR-6' },
   ],
 };

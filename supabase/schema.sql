@@ -6,7 +6,8 @@
 --   * fatos só por inserção (movimentação, resposta, foto, detecção, revisão);
 --   * entrega de EPI imutável, exceto os campos que registram a substituição;
 --   * trilha de auditoria append-only, encadeada por hash;
---   * saldo nunca gravado: é uma view sobre as movimentações.
+--   * saldo nunca gravado: é uma view sobre as movimentações;
+--   * compras: cotação só com preço positivo, pedido recebido sempre com data de chegada.
 --
 -- O token do usuário precisa trazer: empresa_id, obras (lista de uuid), perfil e,
 -- para empreiteira, empregadora_id.
@@ -190,7 +191,7 @@ create table public.revisoes (
 create table public.solicitacoes (
   epi_id uuid not null,
   quantidade integer not null check (quantidade > 0),
-  origem text not null check (origem in ('estoque_minimo', 'requisicao_sem_estoque')),
+  origem text not null check (origem in ('estoque_minimo', 'requisicao_sem_estoque', 'programada')),
   situacao text not null check (situacao in ('nao_autorizada', 'autorizada'))
 );
 
@@ -201,6 +202,36 @@ create table public.movimentacoes (
   origem text not null,
   entrega_id uuid,
   quem_recebeu uuid
+);
+
+-- Compras (motor de cotação em src/dominio/compras.ts).
+create table public.fornecedores (
+  nome text not null,
+  frete_fixo numeric(12,2) not null check (frete_fixo >= 0),
+  pedido_minimo numeric(12,2) not null default 0 check (pedido_minimo >= 0)
+);
+
+create table public.cotacoes (
+  fornecedor_id uuid not null,
+  epi_id uuid not null,
+  ca_id uuid not null,
+  preco_unitario numeric(12,2) not null check (preco_unitario > 0),
+  prazo_dias integer not null check (prazo_dias >= 0),
+  quantidade_disponivel integer check (quantidade_disponivel > 0),
+  valida_ate date not null,
+  origem text not null check (origem in ('manual', 'texto'))
+);
+
+create table public.pedidos (
+  fornecedor_id uuid not null,
+  itens jsonb not null,
+  frete numeric(12,2) not null,
+  total numeric(12,2) not null,
+  prazo_prometido timestamptz not null,
+  situacao text not null check (situacao in ('emitido', 'recebido')),
+  chegou_em timestamptz,
+  no_prazo boolean,
+  constraint recebido_tem_chegada check (situacao = 'emitido' or (chegou_em is not null and no_prazo is not null))
 );
 
 create table public.audit_log (
@@ -225,7 +256,7 @@ begin
   foreach t in array array[
     'empresas', 'obras', 'frentes', 'funcoes', 'usuarios', 'trabalhadores', 'consentimentos',
     'epis', 'matriz', 'cas', 'requisicoes', 'entregas', 'checkins', 'respostas', 'fotos',
-    'deteccoes', 'revisoes', 'solicitacoes', 'movimentacoes'
+    'deteccoes', 'revisoes', 'solicitacoes', 'movimentacoes', 'fornecedores', 'cotacoes', 'pedidos'
   ] loop
     execute format($f$
       alter table public.%1$I
@@ -286,6 +317,11 @@ alter table public.solicitacoes add foreign key (epi_id) references public.epis 
 alter table public.movimentacoes
   add foreign key (epi_id) references public.epis (id),
   add foreign key (entrega_id) references public.entregas (id);
+alter table public.cotacoes
+  add foreign key (fornecedor_id) references public.fornecedores (id),
+  add foreign key (epi_id) references public.epis (id),
+  add foreign key (ca_id) references public.cas (id);
+alter table public.pedidos add foreign key (fornecedor_id) references public.fornecedores (id);
 
 -- Empreiteira só enxerga os próprios trabalhadores (e o que for deles).
 create policy so_proprios on public.trabalhadores as restrictive for all to authenticated
@@ -379,7 +415,8 @@ declare
 begin
   foreach t in array array[
     'trabalhadores', 'consentimentos', 'matriz', 'cas', 'requisicoes', 'entregas', 'checkins',
-    'respostas', 'fotos', 'deteccoes', 'revisoes', 'solicitacoes', 'movimentacoes'
+    'respostas', 'fotos', 'deteccoes', 'revisoes', 'solicitacoes', 'movimentacoes',
+    'fornecedores', 'cotacoes', 'pedidos'
   ] loop
     execute format(
       'create trigger auditar after insert or update or delete on public.%I

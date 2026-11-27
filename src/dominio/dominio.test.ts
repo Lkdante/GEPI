@@ -262,10 +262,11 @@ describe('ciclo do EPI', () => {
       motivo_sem_devolucao: null,
       foto_hash: null,
     };
+    const doCinto = () => e.solicitacoes.filter((s) => s.epi_id === cinto);
     entregarEPI(e, ctx, dados);
-    expect(e.solicitacoes).toHaveLength(0);
+    expect(doCinto()).toHaveLength(0);
     entregarEPI(e, ctx, dados);
-    expect(e.solicitacoes.map((s) => s.origem)).toEqual(['estoque_minimo']);
+    expect(doCinto().map((s) => s.origem)).toEqual(['estoque_minimo']);
   });
 
   it('empreiteira: pedido não vai ao almoxarifado nem baixa estoque', () => {
